@@ -1,0 +1,111 @@
+# Сборка Uniqly под Windows на серверах GitHub.
+#
+# Зачем: .exe нельзя собрать на Маке — PyInstaller упаковывает интерпретатор
+# той системы, на которой запущен. Здесь сборка идёт на настоящей Windows,
+# готовый архив скачивается со страницы запуска (вкладка Actions → artifacts).
+#
+# Запуск: вкладка Actions → «Сборка Windows» → Run workflow (кнопка справа).
+# Пуш в ветку сборку НЕ запускает — только вручную, чтобы не тратить минуты
+# GitHub на каждый коммит.
+name: Сборка Windows
+
+on:
+  workflow_dispatch:        # только вручную, кнопкой
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Поставить Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"     # та же версия, что в venv311 на Маке
+
+      - name: Поставить зависимости
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-app.txt
+          pip install pyinstaller
+
+      # Статическая сборка ffmpeg под Windows. Берём gyan.dev — там
+      # "essentials" уже собран одним .exe без внешних библиотек, ровно как
+      # нужно: у пользователя своего ffmpeg нет.
+      - name: Скачать ffmpeg
+        shell: pwsh
+        run: |
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_tmp
+          New-Item -ItemType Directory -Force -Path bin/windows-x64 | Out-Null
+          # внутри архива папка вида ffmpeg-7.x-essentials_build/bin/
+          $bin = Get-ChildItem -Path ffmpeg_tmp -Recurse -Filter ffmpeg.exe |
+                 Select-Object -First 1
+          Copy-Item $bin.FullName bin/windows-x64/ffmpeg.exe
+          $probe = Get-ChildItem -Path ffmpeg_tmp -Recurse -Filter ffprobe.exe |
+                   Select-Object -First 1
+          Copy-Item $probe.FullName bin/windows-x64/ffprobe.exe
+          # проверяем, что бинарники рабочие, а не битый архив
+          .\bin\windows-x64\ffmpeg.exe -version | Select-Object -First 1
+
+      # Ключи КиноПоиска/TMDB вшиваются в сборку, чтобы поиск фильма работал
+      # у друга без настройки. Личных ключей (телеграм-бот, база) тут
+      # нет и быть не должно — см. make_bundled_env.py.
+      # Секреты задаются в Settings → Secrets and variables → Actions.
+      # Если их не задать, сборка всё равно пройдёт — просто без ключей,
+      # и приложение попросит ввести ключ в настройках.
+      - name: Вшить ключи (если заданы)
+        shell: pwsh
+        env:
+          KPDEV_API_KEY: ${{ secrets.KPDEV_API_KEY }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: |
+          if ($env:KPDEV_API_KEY) {
+            @"
+          # Сгенерировано при сборке. Только ключи для поиска фильма.
+          KEYS = {
+              "KPDEV_API_KEY": "$env:KPDEV_API_KEY",
+              "TMDB_API_KEY": "$env:TMDB_API_KEY",
+          }
+
+
+          def apply():
+              import os
+              for k, v in KEYS.items():
+                  if v and not os.getenv(k):
+                      os.environ[k] = v
+          "@ | Out-File -FilePath bundled_env.py -Encoding utf8
+            Write-Host "ключи вшиты"
+          } else {
+            Write-Host "секретов нет — собираем без вшитых ключей"
+          }
+
+      - name: Собрать .exe
+        run: pyinstaller uniqly.spec --noconfirm
+
+      # Проверяем, что сборка не пустая и файл на месте. Запустить .exe тут
+      # нельзя (у сервера нет экрана), поэтому это единственная возможная
+      # автопроверка — реальный запуск только на живой машине.
+      - name: Проверить результат
+        shell: pwsh
+        run: |
+          $exe = "dist/Uniqly/Uniqly.exe"
+          if (-not (Test-Path $exe)) { throw "нет $exe — сборка не удалась" }
+          $size = (Get-Item $exe).Length / 1MB
+          Write-Host ("Uniqly.exe: {0:N1} МБ" -f $size)
+          $total = (Get-ChildItem dist/Uniqly -Recurse |
+                    Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host ("вся папка: {0:N0} МБ" -f $total)
+          if (-not (Test-Path "dist/Uniqly/_internal/bin/windows-x64/ffmpeg.exe")) {
+            Write-Host "ВНИМАНИЕ: ffmpeg не попал в сборку"
+          }
+
+      - name: Выложить архив
+        uses: actions/upload-artifact@v4
+        with:
+          name: Uniqly-Windows
+          path: dist/Uniqly/
+          retention-days: 14

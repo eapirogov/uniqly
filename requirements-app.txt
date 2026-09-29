@@ -1,0 +1,6 @@
+PySide6
+yt-dlp
+httpx
+Pillow
+psycopg2-binary
+python-dotenv

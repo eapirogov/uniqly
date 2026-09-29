@@ -1,0 +1,30 @@
+# окружение и секреты
+.env
+bundled_env.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# рабочие данные пользователя (база, скачанные и готовые ролики, бэкапы)
+workspace/
+
+# вшиваемые в сборку бинарники ffmpeg/ffprobe — качаются fetch_ffmpeg.sh
+bin/
+
+# сборка PyInstaller
+build/
+dist/
+
+# вотермарк и рекламные баннеры — свои у каждого пользователя
+watermark.png
+assets/banners/
+
+# логи
+*.log
+
+# macOS
+.DS_Store
